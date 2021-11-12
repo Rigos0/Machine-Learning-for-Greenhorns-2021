@@ -11,7 +11,7 @@ parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--batch_size", default=10, type=int, help="Batch size")
 parser.add_argument("--classes", default=10, type=int, help="Number of classes to use")
-parser.add_argument("--epochs", default=10, type=int, help="Number of SGD training epochs")
+parser.add_argument("--epochs", default=3, type=int, help="Number of SGD training epochs")
 parser.add_argument("--hidden_layer", default=20, type=int, help="Hidden layer size")
 parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning rate")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
@@ -39,16 +39,7 @@ def main(args: argparse.Namespace):
     weights = [generator.uniform(size=[train_data.shape[1], args.hidden_layer], low=-0.1, high=0.1),
                generator.uniform(size=[args.hidden_layer, args.classes], low=-0.1, high=0.1)]
 
-
     biases = [np.zeros(args.hidden_layer), np.zeros(args.classes)]
-
-    def is_it_right_otaznik(probability_1, target_value):
-        max_index = np.argmax(probability_1)
-
-        if max_index == target_value:
-            return 1
-        else:
-            return 0
 
     # Takes and returns np array
     def softmax(x):
@@ -58,10 +49,17 @@ def main(args: argparse.Namespace):
     def relu(x):
         return np.maximum(x, 0)
 
+    def is_it_right_otaznik(probability_1, target_value):
+        max_index = np.argmax(probability_1)
+
+        if max_index == target_value:
+            return 1
+        else:
+            return 0
+
     def get_accuracy(data, target_data, weights, biases):
         number_of_correctly_classified = 0
-
-        h, predictions = forward(data, biases, weights)
+        _, predictions = forward(data, biases, weights)
         for i, p in enumerate(predictions):
             number_of_correctly_classified += is_it_right_otaznik(p, target_data[i])
 
@@ -94,10 +92,8 @@ def main(args: argparse.Namespace):
     gradient_sum = [np.zeros(weights[0].shape), np.zeros(weights[1].shape)]
     biases_sum = [np.zeros(biases[0].shape), np.zeros(biases[1].shape)]
 
-    def reluDerivative(x):
-        x[x <= 0] = 0
-
-        x[x > 0] = 1
+    def relu_derivative(x):
+        x = (x > 0) * 1
         return x
 
     for epoch in range(args.epochs):
@@ -111,24 +107,25 @@ def main(args: argparse.Namespace):
             hidden_layer, output_layer = forward(data_point, biases, weights)
             target_value_encoded = encoded_train_target[i]
 
-            loss_L_y_in = output_layer - target_value_encoded
-            loss_L_bias = loss_L_y_in
+            L__y_in = output_layer - target_value_encoded
+            L__bias = L__y_in
 
-            loss_L_weights_y = hidden_layer.reshape(-1, 1) @ loss_L_y_in.reshape(1, -1)
-            biases_sum[1] += loss_L_bias
-            gradient_sum[1] += loss_L_weights_y
+            L__w_y = hidden_layer.reshape(-1, 1) @ L__y_in.reshape(1, -1)
 
-            gradient_hi = weights[1] @ loss_L_y_in
+            L__h = weights[1] @ L__y_in.reshape(-1, 1)
+            h__h_in = relu_derivative(hidden_layer)
+            L__h_in = L__h * h__h_in.reshape(-1, 1)
 
-            # loss_L_x_in = output_layer - target_value_encoded
+            L__w_h = data_point.reshape(-1, 1) @ L__h_in.reshape(1, -1)
 
-            uz_nwm = data_point.reshape(-1, 1) @ gradient_hi.reshape(1, -1)
-
-            gradient_sum[0] += uz_nwm
-            biases_sum[0] += gradient_hi
+            biases_sum[1] += L__bias
+            gradient_sum[0] += L__w_h
+            gradient_sum[1] += L__w_y
+            biases_sum[0] += L__h_in[0]
 
             # for every batch, update the weights
             if ((counter + 1) % args.batch_size) == 0:
+                """very clean code, google please hire me"""
                 average_gradient_0 = gradient_sum[0] / args.batch_size
                 average_gradient_1 = gradient_sum[1] / args.batch_size
                 b_0 = biases_sum[0] / args.batch_size
@@ -136,7 +133,6 @@ def main(args: argparse.Namespace):
 
                 weights[0] -= args.learning_rate * average_gradient_0
                 weights[1] -= args.learning_rate * average_gradient_1
-
                 biases[0] -= args.learning_rate * b_0
                 biases[1] -= args.learning_rate * b_1
 
@@ -159,9 +155,11 @@ def main(args: argparse.Namespace):
 
         # TODO: After the SGD epoch, measure the accuracy for both the
         # train test and the test set.
-        train_accuracy, test_accuracy = get_accuracy(train_data, train_target, weights, biases),\
-                                        get_accuracy(test_data, test_target, weights, biases)
 
+        _, y_pred = forward(train_data, biases, weights)
+        train_accuracy = np.mean(train_target == np.argmax(y_pred, axis=-1))
+        _, test_pred = forward(test_data, biases, weights)
+        test_accuracy = np.mean(test_target == np.argmax(test_pred, axis=-1))
 
         print("After epoch {}: train acc {:.1f}%, test acc {:.1f}%".format(
             epoch + 1, 100 * train_accuracy, 100 * test_accuracy))
