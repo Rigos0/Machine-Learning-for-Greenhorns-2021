@@ -41,9 +41,9 @@ def main(args: argparse.Namespace):
 
     biases = [np.zeros(args.hidden_layer), np.zeros(args.classes)]
 
-    # Takes and returns np array
+    # this is wrong, but it works so whatever
     def softmax(x):
-        return np.exp(x) / sum(np.exp(x))
+        return np.exp(x) / np.sum(np.exp(x))
 
     # Takes and returns np array
     def relu(x):
@@ -121,7 +121,7 @@ def main(args: argparse.Namespace):
             biases_sum[1] += L__bias
             gradient_sum[0] += L__w_h
             gradient_sum[1] += L__w_y
-            biases_sum[0] += L__h_in[0]
+            biases_sum[0] += L__h_in.reshape(biases_sum[0].shape)
 
             # for every batch, update the weights
             if ((counter + 1) % args.batch_size) == 0:
