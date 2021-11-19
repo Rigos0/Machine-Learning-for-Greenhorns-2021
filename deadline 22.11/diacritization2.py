@@ -9,6 +9,7 @@ import urllib.request
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.neural_network import MLPClassifier
+from sklearn.utils import shuffle
 
 
 class Dataset:
@@ -31,9 +32,18 @@ class Dataset:
             self.target = dataset_file.read()
         self.data = self.target.translate(self.DIA_TO_NODIA)
 
+def transl(text):
+    LETTERS_NODIA = "acdeeinorstuuyz"
+    LETTERS_DIA = "áčďéěíňóřšťúůýž"
+
+    # A translation table usable with `str.translate` to rewrite characters with dia to the ones without them.
+    DIA_TO_NODIA = str.maketrans(LETTERS_DIA + LETTERS_DIA.upper(), LETTERS_NODIA + LETTERS_NODIA.upper())
+    return text.translate(DIA_TO_NODIA)
+
+
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--predict", default=None, type=str, help="Run prediction on given data")
+parser.add_argument("--predict", default=True, type=str, help="Run prediction on given data")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=42, type=int, help="Random seed")
 # For these and any other arguments you add, ReCodEx will keep your default value.
@@ -174,6 +184,7 @@ class Text:
     def get_output(self, text, predictions):
         pred_counter = 0
         new_text = ""
+
         for i, letter in enumerate(text):
             if self.needed_to_predict_this_letter(letter):
                 pred = predictions[pred_counter]
@@ -216,19 +227,39 @@ class Text:
 
                     # # we will include the word multiple times in the dataset if it has
                     # # multiple diacritisations
-                    # for z in range(len(diacritised)):
+                    for z in range(len(diacritised)):
                         yield self.convert_piece_of_text_to_np_array(s)
 
     def label_from_dictionary(self, variants):
-        all = self.carky + self.hacky + self.krouzky
-
-        for diacritisations in variants.values():
+        for k, diacritisations in variants.items():
             # for word in diacritisations:
-                for letter in diacritisations[0]:
-                    if letter not in all and not self.needed_to_predict_this_letter(letter):
-                        continue
-                    else:
-                        yield np.array([self.get_letter_class(letter)])
+            for i, letter in enumerate(k):
+                if not self.needed_to_predict_this_letter(letter):
+                    continue
+                else:
+                    for index in range(len(diacritisations)):
+                        yield np.array([self.get_letter_class(diacritisations[index][i])])
+
+    def check_if_word_in_dict(self, dicti, word):
+        if not word[0].isalpha():
+            return word
+        if word[0].isupper():
+            upper = True
+            word = word.lower()
+        else:
+            upper = False
+        nodia = transl(word)
+
+        if nodia in dicti.keys():
+            if len(dicti[nodia]) == 1:
+                w = dicti[nodia][0]
+            else:
+                w = word
+        else:
+            w = word
+        if upper:
+            w = w.capitalize()
+        return w
 
     def create_train_from_dict(self, dicti, train_only=False):
         train_data = []
@@ -245,6 +276,80 @@ class Text:
             return train_data, train_target
         else:
             return train_data
+
+    def convert_words_that_are_in_dict(self, text, dicti):
+        word_started = False
+        word = ""
+        all_words = []
+        for letter in text:
+            # the letter is a space or some junk
+            if not letter.isalpha():
+                if word_started:
+                    all_words.append(self.check_if_word_in_dict(dicti, word))
+                    word_started = False
+                    word = ""
+                all_words.append(letter)
+            # the letter is an actual letter
+            else:
+                word += letter
+                word_started = True
+        new_text = ""
+        for w in all_words:
+            new_text += w
+        return new_text
+
+
+def count_occurrences_of_a_word(text):
+    word_started = False
+    word = ""
+    occurrences = {}
+    for letter in text:
+        # the letter is a space or some junk
+        if not letter.isalpha():
+            if word_started:
+                word = word.lower()
+                if word not in occurrences.keys():
+                    occurrences[word] = 1
+                else:
+                    occurrences[word] += 1
+                word_started = False
+                word = ""
+        # the letter is an actual letter
+        else:
+            word += letter
+            word_started = True
+    return occurrences
+
+
+# returns most frequent word from a list of words
+def get_most_frequent(list_of_words, word_occurrences):
+    frequencies = []
+    for i in range(len(list_of_words)):
+        list_of_words[i] = list_of_words[i].lower()
+    for word in list_of_words:
+        if word in word_occurrences.keys():
+            frequencies.append(word_occurrences[word])
+        else:
+            frequencies.append(0)
+
+    best_index = 0
+    best_value = 0
+    lowest_value = min(frequencies)
+    for i, f in enumerate(frequencies):
+        if f > best_value:
+            best_value = f
+            best_index = i
+    if best_value != 0 and lowest_value < 50:
+        return [list_of_words[best_index]]
+    else: return list_of_words
+
+def improve_real_dictionary(dictionary, word_occurrences):
+    new_dict = {}
+    for line in dictionary.items():
+        key = line[0].lower()
+        new_dict[key] = get_most_frequent(line[1], word_occurrences)
+
+    return new_dict
 
 def main(args: argparse.Namespace):
     # number of letters in front and after to consider
@@ -268,6 +373,8 @@ def main(args: argparse.Namespace):
     OHE = OneHotEncoder(sparse=False, categories=categor, handle_unknown='ignore')
 
     # OHE = OneHotEncoder(sparse=False, categories='auto', handle_unknown='ignore')
+
+
     OHE_label = OneHotEncoder(sparse=False)
 
     if args.predict is None:
@@ -276,30 +383,25 @@ def main(args: argparse.Namespace):
         np.random.seed(args.seed)
         train = Dataset()
         t = Text(train.data, train.target, n)
+        occurrences_dict = count_occurrences_of_a_word(train.target)
+
+        from diacritization_dictionary import Dictionary
+        d = Dictionary()
+        slovnik_pro_velke_kluky = improve_real_dictionary(d.variants, occurrences_dict)
+        print(slovnik_pro_velke_kluky)
+        np.save('slovnik_pro_velke_kluky.npy', slovnik_pro_velke_kluky)
 
         train_data, train_target = t.create_train()
 
-        from diacritization_dictionary import Dictionary
-
-        d = Dictionary()
-
         train_dict, target_dict = t.create_train_from_dict(d.variants, train_only=False)
-
-        train_data = np.concatenate((train_dict, train_data))
-
-        train_data = OHE.fit_transform(train_data)
-        # all_c = []
-        # for feat in OHE.categories_:
-        #     for c in feat:
-        #         if c not in all_c:
-        #             all_c.append(c)
-        #
-        # print(sorted(all_c))
+        train_data = OHE.fit_transform(np.concatenate((train_dict, train_data)))
         train_target = OHE_label.fit_transform(np.concatenate((target_dict, train_target)))
 
-        print(train_data.shape, train_target.shape)
+        train_data, train_target = shuffle(train_data, train_target, random_state=0)
+        print(train_data.shape)
+        print(train_target.shape)
 
-        MLP = MLPClassifier(hidden_layer_sizes=300, verbose=True, max_iter=200)
+        MLP = MLPClassifier(hidden_layer_sizes=(200, 50), verbose=True, max_iter=250, learning_rate='adaptive')
         # TODO: Train a model on the given dataset and store it in `model`.
         model = MLP.fit(train_data, train_target)
 
@@ -309,20 +411,24 @@ def main(args: argparse.Namespace):
 
     else:
         # Use the model and return test set predictions.
-        test = Dataset(args.predict)
+        # test = Dataset(args.predict)
+        test = Dataset()
 
         with lzma.open(args.model_path, "rb") as model_file:
             model = pickle.load(model_file)
 
         # TODO: Generate `predictions` with the test set predictions. Specifically,
         # produce a diacritized `str` with exactly the same number of words as `test.data`.
-        t = Text(test.data, None, n)
+        t = Text(test.data.lower(), None, n)
+
         test_data = t.create_train(train_only=True)
         test_data = OHE.fit_transform(test_data)
         model_predictions = model.predict(test_data)
         predictions = t.get_output(test.data, model_predictions)
-        print(predictions)
+        slovnik_pro_velke_kluky = np.load('slovnik_pro_velke_kluky.npy', allow_pickle=True).item()
 
+        predictions = t.convert_words_that_are_in_dict(predictions, slovnik_pro_velke_kluky)
+        print(predictions)
         return predictions
 
 
