@@ -54,6 +54,7 @@ class Text:
         self.hacky_convert_dict = self.create_convert_dict("cenrszdt", "čěňřšžďť")
         self.krouzky = "ůŮ"
         self.letters_in_front = n
+        self.junk = [".", ",", "\n", "-", ":"]
 
     # nektera pismena ani nemaji diakritiku, model nezajimaji
     def needed_to_predict_this_letter(self, letter):
@@ -75,9 +76,12 @@ class Text:
         return letter_class
 
     def convert_piece_of_text_to_np_array(self, text_piece):
+        text_piece = text_piece.lower()
         arr = np.empty((self.letters_in_front*2 + 1))
 
         for i, letter in enumerate(text_piece):
+            if letter in self.junk:
+                letter = " "
             unicode = ord(letter)
             arr[i] = unicode
         return arr
@@ -101,7 +105,7 @@ class Text:
 
             string += self.text[letter_index]
 
-            # konec kousku
+            #konec kousku
             if delka_textu - letter_index - 1 < self.letters_in_front:
                 string += space * self.letters_in_front
             else:
@@ -182,33 +186,88 @@ class Text:
                     new_letter = text[i]
             else:
                 new_letter = text[i]
-            new_text+= new_letter
+            new_text += new_letter
 
         return new_text
 
-class TrainPrep:
+    def train_data_from_dictionary(self, variants):
+        padding = self.letters_in_front * " "
+        # iterate over all words in the dictionary
+        for w, diacritised in variants.items():
+            padded_word = padding + w + padding
 
-    @staticmethod
-    def get_categories():
-        pass
+            for i, letter in enumerate(padded_word):
+                if not self.needed_to_predict_this_letter(letter):
+                    continue
+
+                # get the piece of text that will be included in the dataset
+                # note: there is no need to care about index errors, as we added
+                # the padding
+                else:
+                    s = ""
+                    # the front
+                    for x in reversed(range(self.letters_in_front)):
+                        s += padded_word[i - x - 1]
+                    # the actual letter we care about
+                    s += letter
+                    # the back
+                    for x in range(self.letters_in_front):
+                        s += padded_word[i + x + 1]
+
+                    # # we will include the word multiple times in the dataset if it has
+                    # # multiple diacritisations
+                    # for z in range(len(diacritised)):
+                        yield self.convert_piece_of_text_to_np_array(s)
+
+    def label_from_dictionary(self, variants):
+        all = self.carky + self.hacky + self.krouzky
+
+        for diacritisations in variants.values():
+            # for word in diacritisations:
+                for letter in diacritisations[0]:
+                    if letter not in all and not self.needed_to_predict_this_letter(letter):
+                        continue
+                    else:
+                        yield np.array([self.get_letter_class(letter)])
+
+    def create_train_from_dict(self, dicti, train_only=False):
+        train_data = []
+        for dato in self.train_data_from_dictionary(dicti):
+            train_data.append(dato)
+        train_data = np.asarray(train_data)
+
+        if not train_only:
+            train_target = []
+            for target in self.label_from_dictionary(dicti):
+                train_target.append(target)
+            train_target = np.asarray(train_target)
+
+            return train_data, train_target
+        else:
+            return train_data
 
 def main(args: argparse.Namespace):
-
+    # number of letters in front and after to consider
     n = 3
 
-    # we need to d
-    cats = np.array([10., 32., 33., 34., 39., 40., 41., 44., 45., 46., 48.,
-                     49., 50., 52., 54., 56., 57., 58., 59., 63., 65., 66., 67.,
-                     68., 69., 70., 71., 72., 73., 74., 75., 76., 77., 78.,
-                     79., 80., 82., 83., 84., 85., 86., 88., 89., 90., 97., 98.,
-                     99., 100., 101., 102., 103., 104., 105., 106., 107., 108., 109.,
-                     110., 111., 112., 114., 115., 116., 117., 118., 119., 120., 121.,
-                     122.])
+    # this could be done better, but for now I am defining the categories "by hand"
+    # otherwise, more complex logic would be needed, because there could be letters missing in
+    # each column in the training data, so when applying the model to unseen data, the required
+    # input shapes wouldn't match
+    cats = np.array([32.0, 33.0, 34.0, 39.0, 40.0, 41.0, 48.0, 49.0,
+                     50.0, 52.0, 54.0, 56.0, 57.0, 59.0, 63.0, 97.0,
+                     98.0, 99.0, 100.0, 101.0, 102.0, 103.0, 104.0,
+                     105.0, 106.0, 107.0, 108.0, 109.0, 110.0, 111.0,
+                     112.0, 113.0, 114.0, 115.0, 116.0, 117.0, 118.0,
+                     119.0, 120.0, 121.0, 122.0])
+
     categor = []
-    for i in range(n*2+1):
+    for i in range(n * 2 + 1):
         categor.append(cats)
 
     OHE = OneHotEncoder(sparse=False, categories=categor, handle_unknown='ignore')
+
+    # OHE = OneHotEncoder(sparse=False, categories='auto', handle_unknown='ignore')
     OHE_label = OneHotEncoder(sparse=False)
 
     if args.predict is None:
@@ -220,13 +279,27 @@ def main(args: argparse.Namespace):
 
         train_data, train_target = t.create_train()
 
+        from diacritization_dictionary import Dictionary
+
+        d = Dictionary()
+
+        train_dict, target_dict = t.create_train_from_dict(d.variants, train_only=False)
+
+        train_data = np.concatenate((train_dict, train_data))
 
         train_data = OHE.fit_transform(train_data)
-        train_target = OHE_label.fit_transform(train_target)
-        print(train_data.shape)
-        print(train_target.shape)
+        # all_c = []
+        # for feat in OHE.categories_:
+        #     for c in feat:
+        #         if c not in all_c:
+        #             all_c.append(c)
+        #
+        # print(sorted(all_c))
+        train_target = OHE_label.fit_transform(np.concatenate((target_dict, train_target)))
 
-        MLP = MLPClassifier(hidden_layer_sizes=300, verbose=True, max_iter=300)
+        print(train_data.shape, train_target.shape)
+
+        MLP = MLPClassifier(hidden_layer_sizes=300, verbose=True, max_iter=200)
         # TODO: Train a model on the given dataset and store it in `model`.
         model = MLP.fit(train_data, train_target)
 
