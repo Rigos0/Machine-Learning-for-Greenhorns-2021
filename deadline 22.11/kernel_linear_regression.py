@@ -3,6 +3,11 @@ import argparse
 
 import numpy as np
 import sklearn.metrics
+import math
+from copy import deepcopy
+from sklearn.metrics.pairwise import rbf_kernel
+
+
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
@@ -10,20 +15,20 @@ parser.add_argument("--batch_size", default=1, type=int, help="Batch size")
 parser.add_argument("--data_size", default=50, type=int, help="Data size")
 parser.add_argument("--kernel", default="rbf", type=str, help="Kernel type [poly|rbf]")
 parser.add_argument("--kernel_degree", default=3, type=int, help="Degree for poly kernel")
-parser.add_argument("--kernel_gamma", default=1.0, type=float, help="Gamma for poly and rbf kernel")
+parser.add_argument("--kernel_gamma", default=50, type=float, help="Gamma for poly and rbf kernel")
 parser.add_argument("--iterations", default=200, type=int, help="Number of training iterations")
-parser.add_argument("--l2", default=0.0, type=float, help="L2 regularization weight")
+parser.add_argument("--l2", default=0.02, type=float, help="L2 regularization weight")
 parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning rate")
-parser.add_argument("--plot", default=False, const=True, nargs="?", type=str, help="Plot the predictions")
+parser.add_argument("--plot", default=True, const=True, nargs="?", type=str, help="Plot the predictions")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=42, type=int, help="Random seed")
 # If you add more arguments, ReCodEx will keep them with your default values.
 
-def main(args: argparse.Namespace) -> tuple[list[float], list[float]]:
+def main(args: argparse.Namespace):
     # Create a random generator with a given seed
     generator = np.random.RandomState(args.seed)
 
-    # Generate an artifical regression dataset
+    # Generate an artificial regression dataset
     train_data = np.linspace(-1, 1, args.data_size)
     train_target = np.sin(5 * train_data) + generator.normal(scale=0.25, size=args.data_size) + 1
 
@@ -31,6 +36,9 @@ def main(args: argparse.Namespace) -> tuple[list[float], list[float]]:
     test_target = np.sin(5 * test_data) + 1
 
     betas = np.zeros(args.data_size)
+
+    bias = np.sum(train_target)/len(train_target)
+
 
     # TODO: Perform `args.iterations` of SGD-like updates, but in dual formulation
     # using `betas` as weights of individual training examples.
@@ -50,9 +58,23 @@ def main(args: argparse.Namespace) -> tuple[list[float], list[float]]:
     # We consider the following `args.kernel`s:
     # - "poly": K(x, y; degree, gamma) = (gamma * x^T y + 1) ^ degree
     # - "rbf": K(x, y; gamma) = exp^{- gamma * ||x - y||^2}
-    #
+
+    def K(x, y, kernel_type="poly"):
+        if kernel_type == "poly":
+            return ((args.kernel_gamma * x.reshape(-1, 1) @ y.reshape(1, -1) + 1) ** args.kernel_degree)
+
+        else:
+            return rbf_kernel(x.reshape(-1,1), y.reshape(-1,1), gamma=args.kernel_gamma)
+
+    """Calculate the initial kernel"""
+    kernel = K(train_data, train_data, args.kernel)
+
     # After each iteration, compute RMSE both on training and testing data.
     train_rmses, test_rmses = [], []
+
+    def get_sum(kernel, index_radku, betas):
+        sum_s = np.sum(betas * kernel[index_radku])
+        return sum_s
 
     for iteration in range(args.iterations):
         permutation = generator.permutation(train_data.shape[0])
@@ -60,9 +82,35 @@ def main(args: argparse.Namespace) -> tuple[list[float], list[float]]:
         # TODO: Process the data in the order of `permutation`, performing
         # batched updates to the `betas`. You can assume that `args.batch_size`
         # exactly divides `train_data.shape[0]`.
+        indices_b = []
+
+        for counter, i in enumerate(permutation):
+            indices_b.append(i)
+
+            if ((counter + 1) % args.batch_size) == 0:
+                """Updata the betas in current batch"""
+                betas_copy = deepcopy(betas)
+                for i_b in indices_b:
+                    betas[i_b] -= (args.learning_rate/args.batch_size) * (get_sum(kernel, i_b, betas_copy)+ bias - train_target[i_b])
+
+                indices_b.clear()
+
+                """L2 update"""
+                betas -= args.l2 * (betas) * args.learning_rate
+
 
         # TODO: Append RMSE on training and testing data to `train_rmses` and
         # `test_rmses` after the iteration.
+        train_predictions = []
+        for i in range(args.data_size):
+            train_predictions.append(get_sum(kernel, i, betas) + bias)
+        train_rmses.append(sklearn.metrics.mean_squared_error(train_predictions, train_target, squared=False))
+
+        test_predictions = []
+        test_kernel = K(test_data, train_data, args.kernel)
+        for i in range(args.data_size*2):
+            test_predictions.append(get_sum(test_kernel, i, betas)+bias)
+        test_rmses.append(sklearn.metrics.mean_squared_error(test_predictions, test_target, squared=False))
 
         if (iteration + 1) % 10 == 0:
             print("Iteration {}, train RMSE {:.2f}, test RMSE {:.2f}".format(
@@ -71,7 +119,10 @@ def main(args: argparse.Namespace) -> tuple[list[float], list[float]]:
     if args.plot:
         import matplotlib.pyplot as plt
         # If you want the plotting to work (not required for ReCodEx), compute the `test_predictions`.
-        test_predictions = None
+        test_predictions = []
+        test_kernel = K(test_data, train_data, args.kernel)
+        for i in range(args.data_size * 2):
+            test_predictions.append(get_sum(test_kernel, i, betas)+bias)
 
         plt.plot(train_data, train_target, "bo", label="Train target")
         plt.plot(test_data, test_target, "ro", label="Test target")
