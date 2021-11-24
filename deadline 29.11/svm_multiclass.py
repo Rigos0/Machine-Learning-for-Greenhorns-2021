@@ -7,23 +7,20 @@ import sklearn.metrics
 import sklearn.model_selection
 from sklearn.metrics.pairwise import rbf_kernel, polynomial_kernel
 
-
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--C", default=5, type=float, help="Inverse regularization strength")
-parser.add_argument("--data_size", default=200, type=int, help="Data size")
-parser.add_argument("--kernel", default="poly", type=str, help="Kernel type [poly|rbf]")
-parser.add_argument("--kernel_degree", default=3, type=int, help="Degree for poly kernel")
+parser.add_argument("--C", default=1, type=float, help="Inverse regularization strength")
+parser.add_argument("--classes", default=10, type=int, help="Number of classes")
+parser.add_argument("--kernel", default="rbf", type=str, help="Kernel type [poly|rbf]")
+parser.add_argument("--kernel_degree", default=2, type=int, help="Degree for poly kernel")
 parser.add_argument("--kernel_gamma", default=1.0, type=float, help="Gamma for poly and rbf kernel")
-parser.add_argument("--max_iterations", default=1000, type=int, help="Maximum number of iterations to perform")
+parser.add_argument("--max_iterations", default=50, type=int, help="Maximum number of iterations to perform")
 parser.add_argument("--max_passes_without_as_changing", default=10, type=int, help="Number of passes without changes to stop after")
-parser.add_argument("--plot", default=False, const=True, nargs="?", type=str, help="Plot the predictions")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=42, type=int, help="Random seed")
-parser.add_argument("--test_size", default=0.5, type=lambda x:int(x) if x.isdigit() else float(x), help="Test set size")
+parser.add_argument("--test_size", default=0.35, type=lambda x:int(x) if x.isdigit() else float(x), help="Test set size")
 parser.add_argument("--tolerance", default=1e-7, type=float, help="Default tolerance for KKT conditions")
 # If you add more arguments, ReCodEx will keep them with your default values.
-
 
 def kernel(args, x, y):
     # TODO: As in `kernel_linear_regression`, We consider the following `args.kernel`s:
@@ -34,14 +31,14 @@ def kernel(args, x, y):
     else:
         return rbf_kernel(x, y, gamma=args.kernel_gamma)
 
-
 def get_sum(kernel, index_radku, a, train_target):
     sum_s = np.sum(a * kernel[index_radku] * train_target)
     return sum_s
 
+def get_sum_predict(kernel, index_radku, weights):
+    sum_s = np.sum(weights * kernel[index_radku])
+    return sum_s
 
-# We implement the SMO algorithm as a separate method, so we can use
-# it in the svm_multiclass assignment too.
 def smo(args, train_data, train_target, test_data, test_target):
     # Create initial weights
     a, b = np.zeros(len(train_data)), 0
@@ -153,54 +150,85 @@ def smo(args, train_data, train_target, test_data, test_target):
     support_vector_weights = []
     for i, a_but_shorter in enumerate(a):
         if a_but_shorter > tol:
-            support_vectors.append([train_data[i][0], train_data[i][1]])
+            support_vectors.append(train_data[i])
             support_vector_weights.append(a_but_shorter*train_target[i])
 
     print("Done, iteration {}, support vectors {}, train acc {:.1f}%, test acc {:.1f}%".format(
         len(train_accs), len(support_vectors), 100 * train_accs[-1], 100 * test_accs[-1]))
 
-    return support_vectors, support_vector_weights, b, train_accs, test_accs
+    return support_vectors, support_vector_weights, b
 
-def main(args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray, float, list[float], list[float]]:
-    # Generate an artifical regression dataset, with +-1 as targets
-    data, target = sklearn.datasets.make_classification(
-        n_samples=args.data_size, n_features=2, n_informative=2, n_redundant=0, random_state=args.seed)
-    target = 2 * target - 1
+def main(args: argparse.Namespace) -> float:
+    # Use the digits dataset.
+    data, target = sklearn.datasets.load_digits(n_class=args.classes, return_X_y=True)
+    data = sklearn.preprocessing.MinMaxScaler().fit_transform(data)
 
     # Split the dataset into a train set and a test set.
     train_data, test_data, train_target, test_target = sklearn.model_selection.train_test_split(
         data, target, test_size=args.test_size, random_state=args.seed)
 
-    # Run the SMO algorithm
-    support_vectors, support_vector_weights, bias, train_accs, test_accs = smo(
-        args, train_data, train_target, test_data, test_target)
+    def get_data(i, j, train, target):
+        new_train_target = []
+        new_train_data = []
+        for index, dato in enumerate(target):
+            if dato == i:
+                new_train_target.append(1)
+                new_train_data.append(train[index])
+            elif dato == j:
+                new_train_target.append(-1)
+                new_train_data.append(train[index])
+        return new_train_data, new_train_target
 
-    if args.plot:
-        import matplotlib.pyplot as plt
-        def plot(predict, support_vectors):
-            xs = np.linspace(np.min(data[:, 0]), np.max(data[:, 0]), 50)
-            ys = np.linspace(np.min(data[:, 1]), np.max(data[:, 1]), 50)
-            predictions = [[predict(np.array([x, y])) for x in xs] for y in ys]
-            test_mismatch = np.sign([predict(x) for x in test_data]) != test_target
-            plt.figure()
-            plt.contourf(xs, ys, predictions, levels=0, cmap=plt.cm.RdBu)
-            plt.contour(xs, ys, predictions, levels=[-1, 0, 1], colors="k", zorder=1)
-            plt.scatter(train_data[:, 0], train_data[:, 1], c=train_target, marker="o", label="Train", cmap=plt.cm.RdBu, zorder=2)
-            plt.scatter(support_vectors[:, 0], support_vectors[:, 1], marker="o", s=90, label="Support Vectors", c="#00dd00")
-            plt.scatter(test_data[:, 0], test_data[:, 1], c=test_target, marker="*", label="Test", cmap=plt.cm.RdBu, zorder=2)
-            plt.scatter(test_data[test_mismatch, 0], test_data[test_mismatch, 1], marker="*", s=130, label="Test Errors", c="#ffff00")
-            plt.legend(loc="upper center", ncol=4)
+    # TODO: Using One-vs-One scheme, train (K \binom 2) classifiers, one for every
+    # pair of classes $i < j$, using the `smo` method.
+    #
+    # When training a classifier for classes $i < j$:
+    # - keep only the training data of these classes, in the same order
+    #   as in the input dataset;
+    # - use targets 1 for the class $i$ and -1 for the class $j$.
+    trained_classifiers = []
+    corresponding_classes = []
+    for i in range(args.classes):
+        for j in range(args.classes):
+            if i < j:
+                print("Training classes {} and {}".format(i, j))
+                X_train, y_train = get_data(i, j, train_data, train_target)
+                X_test, y_test = get_data(i, j, test_data, test_target)
+                support_vectors, weights, bias = smo(args, X_train, y_train, X_test, y_test)
+                trained_classifiers.append([np.asarray(support_vectors), np.asarray(weights), bias])
+                corresponding_classes.append([i, j])
 
-        # If you want plotting to work (not required for ReCodEx), you need to
-        # define `predict_function` computing SVM value `y(x)` for the given x.
-        predict_function = lambda x: None
+    # TODO: Classify the test set by majority voting of all the trained classifiers,
+    # using the lowest class index in the case of ties.
 
-        plot(predict_function, support_vectors)
-        if args.plot is True: plt.show()
-        else: plt.savefig(args.plot, transparent=True, bbox_inches="tight")
+    # Note that during prediction, only the support vectors returned by the `smo`
+    # should be used, not all training data.
+    predictions = np.zeros((len(test_data), args.classes))
+    for index, model in enumerate(trained_classifiers):
+        # support_vectors = model[0]
+        # w = model[1]
+        # bias = model[2]
+        class_1, class_2 = corresponding_classes[index][0], corresponding_classes[index][1]
+        test_kernel = kernel(args, test_data, model[0])
 
-    return support_vectors, support_vector_weights, bias, train_accs, test_accs
+        for i in range(len(test_data)):
+            raw_pred = get_sum_predict(test_kernel, i, model[1]) + model[2]
+            if raw_pred > 0:
+                pred = class_1
+            else:
+                pred = class_2
+            predictions[i][pred] += 1
+
+    argmaxed_preds = []
+    for p in predictions:
+        argmaxed_preds.append(np.argmax(p))
+
+    # Finally, compute the test set prediction accuracy.
+    test_accuracy = sklearn.metrics.accuracy_score(argmaxed_preds, test_target)
+
+    return test_accuracy
 
 if __name__ == "__main__":
     args = parser.parse_args([] if "__file__" not in globals() else None)
-    main(args)
+    accuracy = main(args)
+    print("Test set accuracy: {:.2f}%".format(100 * accuracy))
