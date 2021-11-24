@@ -8,7 +8,6 @@ from copy import deepcopy
 from sklearn.metrics.pairwise import rbf_kernel
 
 
-
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--batch_size", default=1, type=int, help="Batch size")
@@ -96,7 +95,7 @@ def main(args: argparse.Namespace):
                 indices_b.clear()
 
                 """L2 update"""
-                betas -= args.l2 * (betas) * args.learning_rate
+                betas -= args.l2 * betas * args.learning_rate
 
 
         # TODO: Append RMSE on training and testing data to `train_rmses` and
