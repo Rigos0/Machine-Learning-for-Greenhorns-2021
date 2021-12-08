@@ -61,7 +61,7 @@ def smo(args, train_data, train_target, test_data, test_target):
             j = j + (j >= i)
 
             # TODO: Check that a[i] fulfils the KKT conditions, using `args.tolerance` during comparisons.
-            E_i = get_sum(train_kernel, i, a, train_target)+b - train_target[i]
+            E_i = get_sum(train_kernel, i, a, train_target) + b - train_target[i]
             if (a[i] < C - tol and train_target[i]*E_i < -tol) or (a[i] > tol and train_target[i]*E_i > tol):
                 # If the conditions do not hold, then
                 # - compute the updated unclipped a_j^new.
