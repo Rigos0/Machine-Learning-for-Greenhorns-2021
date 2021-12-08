@@ -11,9 +11,8 @@ import numpy as np
 import sklearn.metrics
 import sklearn.model_selection
 import sklearn.neighbors
-from collections import Counter
-from copy import deepcopy
 from math import log
+
 
 class NewsGroups:
     def __init__(self,
@@ -32,9 +31,10 @@ class NewsGroups:
         self.target = dataset.target[:data_size]
         self.target_names = dataset.target_names
 
+
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--idf", default=True, action="store_true", help="Use IDF weights")
+parser.add_argument("--idf", default=False, action="store_true", help="Use IDF weights")
 parser.add_argument("--k", default=1, type=int, help="K nearest neighbors to consider")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=37, type=int, help="Random seed")
@@ -42,6 +42,7 @@ parser.add_argument("--tf", default=True, action="store_true", help="Use TF weig
 parser.add_argument("--test_size", default=500, type=int, help="Test set size")
 parser.add_argument("--train_size", default=1000, type=int, help="Train set size")
 # For these and any other arguments you add, ReCodEx will keep your default value.
+
 
 def main(args: argparse.Namespace) -> float:
     # Load the 20newsgroups data.
@@ -54,8 +55,9 @@ def main(args: argparse.Namespace) -> float:
     # TODO: Create a feature for every word that is present at least twice
     # in the training data. A word is every maximal sequence of at least 2 word characters,
     # where a word character corresponds to a regular expression `\w`.
+
     def get_words(document):
-        return re.sub(r"[^\w]", ' ', document).split()
+        return re.findall(r"[\w]+", document)
 
     """Creates a list in the form:
     [(number_of_words, {'word':number_of_occurences_in_doc, 'word2':....,}), ({....]  where each dict in the list corresponds to 
@@ -65,8 +67,8 @@ def main(args: argparse.Namespace) -> float:
     def process_dataset(args, data):
         processed = []
         all_words = {}
-        words_found_once_so_far = []
         words_counter = 0
+        words_found_once_in_train_data = []
 
         # for each document create a dict with
         for d_index, document in enumerate(data):
@@ -75,22 +77,28 @@ def main(args: argparse.Namespace) -> float:
             number_of_words_in_doc = len(words)
 
             for w in words:
-                # if word isnt in the dictionary yet
                 if len(w) > 1:
                     # the occurrences in single document
-                    first_occurrence_in_doc = False
+
+                    # if word isn't in the dictionary yet
                     if w not in just_a_dict.keys():
                         just_a_dict[w] = 1
                         first_occurrence_in_doc = True
-                    just_a_dict[w] += 1
+                    else:
+                        just_a_dict[w] += 1
+                        first_occurrence_in_doc = False
 
                     # the dict with all words, its index and number of occurrences for IDF
-                    if w not in all_words.keys():
-                        all_words[w] = [words_counter, 1]
-                        words_counter += 1
+                    # to check if the word occurs at least twice in the dataset
+                    if w not in words_found_once_in_train_data:
+                        words_found_once_in_train_data.append(w)
                     else:
-                        if first_occurrence_in_doc:
-                            all_words[w][1] += 1 # the word occurs in another document
+                        if w not in all_words.keys():
+                            all_words[w] = [words_counter, 1]
+                            words_counter += 1
+                        else:
+                            if first_occurrence_in_doc:
+                                all_words[w][1] += 1  # the word occurs in another document
 
             processed.append((number_of_words_in_doc, just_a_dict))
 
@@ -120,11 +128,8 @@ def main(args: argparse.Namespace) -> float:
         document_dict = document_info[1]
         for word, occurrences in document_dict.items():
             tf_value = occurrences/number_of_words_in_document
-            if not test:
+            if word in all_words.keys():
                 array_representation[all_words[word][0]] = tf_value
-            else:
-                if word in all_words.keys():
-                    array_representation[all_words[word][0]] = tf_value
 
         return array_representation
 
@@ -134,13 +139,9 @@ def main(args: argparse.Namespace) -> float:
         document_dict = document_info[1]
         for word in document_dict.keys():
             # if we are using this function for test data, the word may not exist in all_words
-            if not test:
+            if word in all_words.keys():
                 word_index = all_words[word][0]
                 array_representation[word_index] = all_idfs[word_index]
-            else:
-                if word in all_words.keys():
-                    word_index = all_words[word][0]
-                    array_representation[word_index] = all_idfs[word_index]
 
         return array_representation
 
@@ -149,13 +150,9 @@ def main(args: argparse.Namespace) -> float:
         array_representation = get_empty_array()
         document_dict = document_info[1]
         for word in document_dict.keys():
-            if not test:
+            if word in all_words.keys():
                 word_index = all_words[word][0]
                 array_representation[word_index] = 1
-            else:
-                if word in all_words.keys():
-                    word_index = all_words[word][0]
-                    array_representation[word_index] = 1
 
         return array_representation
 
@@ -175,14 +172,14 @@ def main(args: argparse.Namespace) -> float:
                     # the occurrences in single document
                     if w not in just_a_dict.keys():
                         just_a_dict[w] = 1
-                    just_a_dict[w] += 1
+                    else:
+                        just_a_dict[w] += 1
 
             processed.append((number_of_words_in_doc, just_a_dict))
 
         return processed
 
     processed_test_data = process_test_data(test_data)
-
 
     # TODO: Weight the selected features using
     # - term frequency (TF), if `args.tf` is set;
@@ -223,10 +220,22 @@ def main(args: argparse.Namespace) -> float:
         all_idf = get_idf_of_all_words()
     else:
         all_idf = None
+
     X_train = get_data_representation(args, processed_documents, all_idfs=all_idf)
     X_test = get_data_representation(args, processed_test_data, all_idfs=all_idf, test=True)
+    all_words.clear()
+    processed_documents.clear()
+    processed_test_data.clear()
 
-    # TODODODODOODD:  # Finally, for each document L2-normalize its features.
+    # Finally, for each document L2-normalize its features.
+    from sklearn.preprocessing import normalize
+
+    def L2_regularise(data):
+        data = normalize(data)
+        return data
+
+    X_train = L2_regularise(X_train)
+    X_test = L2_regularise(X_test)
 
     # TODO: Perform classification of the test set using the k-NN algorithm
     # from sklearn (pass the `algorithm="brute"` option), with `args.k` nearest
@@ -235,10 +244,7 @@ def main(args: argparse.Namespace) -> float:
     # Note that for L2-normalized data (which we have), the nearest neighbors
     # are equivalent to using the usual Euclidean distance (L2 distance).
 
-    # def cosine_sim(x, y):
-    #     return x * y.t / (|| x || * || y ||)
-
-    model = sklearn.neighbors.KNeighborsClassifier(n_neighbors=args.k, weights='distance', algorithm='brute')
+    model = sklearn.neighbors.KNeighborsClassifier(n_neighbors=args.k, algorithm='brute')
     model.fit(X_train, train_target)
     prediction = model.predict(X_test)
     from sklearn.metrics import f1_score as f1
@@ -246,6 +252,7 @@ def main(args: argparse.Namespace) -> float:
     f1_score = f1(prediction, test_target, average='macro')
 
     return f1_score
+
 if __name__ == "__main__":
     args = parser.parse_args([] if "__file__" not in globals() else None)
     f1_score = main(args)
