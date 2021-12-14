@@ -34,7 +34,7 @@ class NewsGroups:
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--idf", default=False, action="store_true", help="Use IDF weights")
+parser.add_argument("--idf", default=True, action="store_true", help="Use IDF weights")
 parser.add_argument("--k", default=1, type=int, help="K nearest neighbors to consider")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=37, type=int, help="Random seed")
@@ -59,52 +59,67 @@ def main(args: argparse.Namespace) -> float:
     def get_words(document):
         return re.findall(r"[\w]+", document)
 
-    """Creates a list in the form:
-    [(number_of_words, {'word':number_of_occurences_in_doc, 'word2':....,}), ({....]  where each dict in the list corresponds to 
-    one document AND a dict with words and corresponding indices and in how many documents the word occurs 
-    {'word':(0, in_how_many_documents_the_word_occurs...} """
-
-    def process_dataset(args, data):
-        processed = []
-        all_words = {}
-        words_counter = 0
-        words_found_once_in_train_data = []
-
-        # for each document create a dict with
-        for d_index, document in enumerate(data):
-            just_a_dict = {}
+    def find_all_words_in_the_dataset(data):
+        words_occurrences = {}
+        # count the words in the dataset
+        for document in data:
             words = get_words(document)
-            number_of_words_in_doc = len(words)
 
             for w in words:
-                if len(w) > 1:
-                    # the occurrences in single document
+                if w not in words_occurrences:
+                    words_occurrences[w] = 1
+                else:
+                    words_occurrences[w] += 1
 
-                    # if word isn't in the dictionary yet
-                    if w not in just_a_dict.keys():
-                        just_a_dict[w] = 1
-                        first_occurrence_in_doc = True
-                    else:
-                        just_a_dict[w] += 1
-                        first_occurrence_in_doc = False
+        # keep the words that are at least once in the dataset
+        all_words_in_data = {}
+        word_counter = 0 # this will later become the index of the feature of the word
+        for key in words_occurrences.keys():
+            if words_occurrences[key] != 1:
+                # in the place of zero, we will later count the number of docs the word is in
+                all_words_in_data[key] = [word_counter, 0]
+                word_counter += 1
+        return all_words_in_data, word_counter
 
-                    # the dict with all words, its index and number of occurrences for IDF
-                    # to check if the word occurs at least twice in the dataset
-                    if w not in words_found_once_in_train_data:
-                        words_found_once_in_train_data.append(w)
-                    else:
-                        if w not in all_words.keys():
-                            all_words[w] = [words_counter, 1]
-                            words_counter += 1
-                        else:
-                            if first_occurrence_in_doc:
-                                all_words[w][1] += 1  # the word occurs in another document
+    """Creates a list in the form:
+    [ (number_of_words, {'word':number_of_occurrences_in_doc, 'word2':....,}) , ({....] 
+    where each dict in the list corresponds to one document AND a dict with words 
+    and corresponding indices and in how many documents the word occurs 
+    {'word':(0, in_how_many_documents_the_word_occurs...}                       """
 
-            processed.append((number_of_words_in_doc, just_a_dict))
+    def process_dataset(args, data, all_words_in_dataset):
+        processed = []
+        words_counter = 0
 
-        return processed, all_words, words_counter
+        for document in data:
+            single_doc_dict = {}
+            words = get_words(document)
+            number_of_words_in_doc = 0
 
-    processed_documents, all_words, number_of_words = process_dataset(args, train_data)
+            # Iterate over all words in the document
+            for w in words:
+                if len(w) < 2:
+                    continue
+
+                number_of_words_in_doc += 1
+                # the occurrences in the single document
+                if w not in single_doc_dict.keys():
+                    single_doc_dict[w] = 1
+                    first_occurrence_in_doc = True
+                else:
+                    single_doc_dict[w] += 1
+                    first_occurrence_in_doc = False
+
+                if first_occurrence_in_doc:
+                    if w in all_words_in_dataset.keys():
+                        all_words_in_dataset[w][1] += 1  # the word occurs in another document
+
+            processed.append((number_of_words_in_doc, single_doc_dict))
+        # processed train data, dict with all words in the dataset, number of words in the dataset
+        return processed, all_words_in_dataset
+
+    all_words , number_of_words = find_all_words_in_the_dataset(train_data)
+    processed_documents, all_words = process_dataset(args, train_data, all_words)
 
     def idf_formula(number_of_documents, number_of_documents_containing_t):
         return log(number_of_documents / (number_of_documents_containing_t + 1))
@@ -140,8 +155,7 @@ def main(args: argparse.Namespace) -> float:
         for word in document_dict.keys():
             # if we are using this function for test data, the word may not exist in all_words
             if word in all_words.keys():
-                word_index = all_words[word][0]
-                array_representation[word_index] = all_idfs[word_index]
+                array_representation[all_words[word][0]] = all_idfs[all_words[word][0]]
 
         return array_representation
 
@@ -151,31 +165,31 @@ def main(args: argparse.Namespace) -> float:
         document_dict = document_info[1]
         for word in document_dict.keys():
             if word in all_words.keys():
-                word_index = all_words[word][0]
-                array_representation[word_index] = 1
+                array_representation[all_words[word][0]] = 1
 
         return array_representation
 
     # similar to process_dataset, but done here for better readability
     def process_test_data(data):
         processed = []
-
         # for each document create a dict with
-        for d_index, document in enumerate(data):
-            just_a_dict = {}
+        for document in data:
+            single_doc_dict = {}
             words = get_words(document)
-            number_of_words_in_doc = len(words)
+            number_of_words_in_doc = 0
 
             for w in words:
                 # if word isnt in the dictionary yet
-                if len(w) > 1:
-                    # the occurrences in single document
-                    if w not in just_a_dict.keys():
-                        just_a_dict[w] = 1
-                    else:
-                        just_a_dict[w] += 1
+                if len(w) < 2:
+                    continue
+                number_of_words_in_doc += 1
+                # the occurrences in single document
+                if w not in single_doc_dict.keys():
+                    single_doc_dict[w] = 1
+                else:
+                    single_doc_dict[w] += 1
 
-            processed.append((number_of_words_in_doc, just_a_dict))
+            processed.append((number_of_words_in_doc, single_doc_dict))
 
         return processed
 
